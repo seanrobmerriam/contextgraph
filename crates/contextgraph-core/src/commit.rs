@@ -58,3 +58,36 @@ impl From<CommitId> for String {
         value.to_hex()
     }
 }
+
+/// Minimal hex encode/decode so we don't need an extra dependency.
+mod hex {
+    pub fn encode(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[derive(Debug)]
+    pub struct HexError(pub String);
+    impl std::fmt::Display for HexError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "invalid hex: {}", self.0)
+        }
+    }
+
+    pub fn decode(s: &str) -> std::result::Result<Vec<u8>, HexError> {
+        if !s.len().is_multiple_of(2) {
+            return Err(HexError(s.to_string()));
+        }
+        let mut out = Vec::with_capacity(s.len() / 2);
+        let bytes = s.as_bytes();
+        for chunk in bytes.chunks(2) {
+            let hi = (chunk[0] as char)
+                .to_digit(16)
+                .ok_or_else(|| HexError(s.to_string()))?;
+            let lo = (chunk[1] as char)
+                .to_digit(16)
+                .ok_or_else(|| HexError(s.to_string()))?;
+            out.push(((hi << 4) | lo) as u8);
+        }
+        Ok(out)
+    }
+}
