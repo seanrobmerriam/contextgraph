@@ -11,3 +11,13 @@ use crate::store::CommitStore;
 use crate::Result;
 use serde::Serialize;
 
+/// One position in a structural diff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum DiffOp {
+    /// Present, unchanged, in both sides (same commit id).
+    Common(MaterializedMessage),
+    /// Present only in `to` (the "new" side).
+    Added(MaterializedMessage),
+    /// Present only in `from` (the "old" side).
+    Removed(MaterializedMessage),
+}
