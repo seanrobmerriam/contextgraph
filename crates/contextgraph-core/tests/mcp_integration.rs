@@ -101,3 +101,15 @@ fn text_of(result: &rmcp::model::CallToolResult) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+async fn spawn_client(
+    db_path: &str,
+) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
+    let bin = env!("CARGO_BIN_EXE_contextgraph-mcp");
+    let db_path = db_path.to_string();
+    let transport = TokioChildProcess::new(tokio::process::Command::new(bin).configure(|cmd| {
+        cmd.env("CONTEXTGRAPH_DB", &db_path);
+    }))?;
+    let client = ().serve(transport).await?;
+    Ok(client)
+}
