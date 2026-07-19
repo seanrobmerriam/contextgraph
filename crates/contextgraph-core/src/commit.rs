@@ -147,3 +147,18 @@ pub enum Delta {
         strategy: MergeStrategy,
     },
 }
+
+/// How a merge commit's materialized view is chosen between its two
+/// parents. There is no automatic content merging of divergent
+/// conversation turns — that's not well-defined for natural language, so
+/// both strategies just pick which parent's view "wins" by controlling
+/// parent order (`materialize` always follows the first parent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStrategy {
+    /// The merge commit materializes as `branch_a`'s view; `branch_b` is
+    /// linked as the second parent for audit/lineage only.
+    RecordOnly,
+    /// The merge commit materializes as `branch_b`'s view instead.
+    PreferOther,
+}
