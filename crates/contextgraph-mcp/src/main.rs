@@ -239,3 +239,86 @@ impl ContextGraphMcp {
         to_json(&outcome)
     }
 }
+
+#[tool_handler]
+impl ServerHandler for ContextGraphMcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_instructions(
+            "Contextgraph: a versioned, git-like context store for LLM agent conversations. \
+             Use `fork` to branch a decision point, `checkout` to materialize a conversation, \
+             `diff` to compare two continuations, `log` to walk history, and `bisect` to find \
+             where a regression was introduced. The `contextgraph://branches` and \
+             `contextgraph://head` resources expose the current branch list and HEAD.",
+        )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let mut resources = vec![Resource::new(
+            "contextgraph://branches",
+            "All branches and their current heads",
+        )];
+        if self
+            .graph
+            .store()
+            .get_branch("main")
+            .await
+            .map_err(mcp_err)?
+            .is_some()
+        {
+            resources.push(Resource::new(
+                "contextgraph://head",
+                "HEAD (the 'main' branch's current commit)",
+            ));
+        }
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        match request.uri.as_str() {
+            "contextgraph://branches" => {
+                let branches = self.graph.list_branches().await.map_err(mcp_err)?;
+                let json: serde_json::Value = branches
+                    .into_iter()
+                    .map(|(name, id)| (name, serde_json::Value::String(id.to_hex())))
+                    .collect();
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    json.to_string(),
+                    &request.uri,
+                )]))
+            }
+            "contextgraph://head" => {
+                let head = self
+                    .graph
+                    .store()
+                    .get_branch("main")
+                    .await
+                    .map_err(mcp_err)?
+                    .ok_or_else(|| {
+                        McpError::resource_not_found("no 'main' branch exists yet", None)
+                    })?;
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    head.to_hex(),
+                    &request.uri,
+                )]))
+            }
+            other => Err(McpError::resource_not_found(
+                format!("unknown resource: {other}"),
+                None,
+            )),
+        }
+    }
+}
