@@ -40,3 +40,18 @@ pub trait CommitStore: Send + Sync {
     /// any branch. Not exposed as a normal write-path operation.
     async fn remove_many(&self, ids: &[CommitId]) -> Result<()>;
 }
+
+/// Named, mutable pointers to commits — the only mutable state in the system.
+#[async_trait]
+pub trait RefStore: Send + Sync {
+    async fn get_branch(&self, name: &str) -> Result<Option<CommitId>>;
+
+    /// Creates or moves a branch to point at `commit_id`. Callers are
+    /// responsible for validating that `commit_id` exists before calling
+    /// this (see `ContextGraph::branch`/`move_branch`).
+    async fn set_branch(&self, name: &str, commit_id: CommitId) -> Result<()>;
+
+    async fn delete_branch(&self, name: &str) -> Result<()>;
+
+    async fn list_branches(&self) -> Result<Vec<(String, CommitId)>>;
+}
