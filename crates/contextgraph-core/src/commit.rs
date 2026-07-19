@@ -113,3 +113,37 @@ impl fmt::Display for Author {
         write!(f, "{s}")
     }
 }
+
+/// The payload of a commit: what actually changed.
+///
+/// `Compaction` is a first-class variant, not a special case bolted onto
+/// checkout: it replaces N prior commits' contribution to the materialized
+/// window with a single condensed message, without deleting anything from
+/// the DAG. `replaces` lists the commit ids (from the parent chain) whose
+/// materialized turns are folded away by this op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Delta {
+    Message {
+        content: String,
+    },
+    ToolCall {
+        call_id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    ToolResult {
+        call_id: String,
+        result: serde_json::Value,
+    },
+    Compaction {
+        replaces: Vec<CommitId>,
+        summary: String,
+    },
+    /// The delta of a merge commit itself: a pure audit/lineage marker, not
+    /// new conversational content. Materializing a merge commit never
+    /// surfaces this as a visible message — see `materialize` and `merge`.
+    Merge {
+        strategy: MergeStrategy,
+    },
+}
