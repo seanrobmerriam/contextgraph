@@ -169,3 +169,14 @@ pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
 }
+
+/// Caller-supplied, filterable metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Metadata {
+    pub model_id: Option<String>,
+    pub token_usage: Option<TokenUsage>,
+    pub timestamp: DateTime<Utc>,
+    /// Arbitrary key-value tags, e.g. `{"step": "planning"}`. A `BTreeMap` so
+    /// that serialization (and therefore the content hash) is order-independent.
+    pub tags: BTreeMap<String, String>,
+}
