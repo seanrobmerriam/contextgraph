@@ -1,0 +1,21 @@
+[package]
+name = "contextgraph-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for contextgraph, the versioned context store"
+
+[[bin]]
+name = "contextgraph"
+path = "src/main.rs"
+
+[dependencies]
+contextgraph-core = { path = "../contextgraph-core" }
+clap.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

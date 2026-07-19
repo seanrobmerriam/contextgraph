@@ -1,0 +1,25 @@
+[package]
+name = "contextgraph-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server exposing contextgraph operations as tools"
+
+[[bin]]
+name = "contextgraph-mcp"
+path = "src/main.rs"
+
+[dependencies]
+contextgraph-core = { path = "../contextgraph-core" }
+tokio.workspace = true
+rmcp = { version = "2", features = ["server", "transport-io"] }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+anyhow = "1"
+
+[dev-dependencies]
+rmcp = { version = "2", features = ["client", "transport-child-process"] }
+tempfile.workspace = true
+chrono.workspace = true
