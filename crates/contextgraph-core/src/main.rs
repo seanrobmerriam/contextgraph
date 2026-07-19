@@ -94,3 +94,33 @@ struct LogParams {
 fn default_log_limit() -> usize {
     20
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BisectParams {
+    /// A commit where the checked-for behavior is known to still hold.
+    good: String,
+    /// A commit where the checked-for behavior has flipped.
+    bad: String,
+    /// Substring to check for in the most recent (latest) message — this
+    /// is a check against the live tail of the conversation, not its full
+    /// history.
+    contains: String,
+}
+
+#[derive(Clone)]
+pub struct ContextGraphMcp {
+    graph: Arc<ContextGraph<SqliteStore>>,
+    // Read by the #[tool_handler]-generated call_tool/list_tools methods;
+    // rustc's dead-code analysis doesn't see through that macro expansion.
+    #[allow(dead_code)]
+    tool_router: ToolRouter<Self>,
+}
+
+impl ContextGraphMcp {
+    pub fn new(graph: ContextGraph<SqliteStore>) -> Self {
+        Self {
+            graph: Arc::new(graph),
+            tool_router: Self::tool_router(),
+        }
+    }
+}
