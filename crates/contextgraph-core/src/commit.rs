@@ -206,3 +206,23 @@ struct CommitContent<'a> {
     delta: &'a Delta,
     metadata: &'a Metadata,
 }
+
+/// Computes the content-addressed id for a would-be commit. Pure function:
+/// identical inputs always yield the identical id.
+pub fn compute_commit_id(
+    parent_ids: &[CommitId],
+    author: &Author,
+    delta: &Delta,
+    metadata: &Metadata,
+) -> CommitId {
+    let content = CommitContent {
+        parent_ids,
+        author,
+        delta,
+        metadata,
+    };
+    // Struct field order is fixed by declaration, and `tags` is a BTreeMap,
+    // so this serialization is deterministic for identical content.
+    let bytes = serde_json::to_vec(&content).expect("commit content is always serializable");
+    CommitId(*blake3::hash(&bytes).as_bytes())
+}
