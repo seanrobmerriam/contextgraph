@@ -214,3 +214,36 @@ async fn bisect_finds_the_flip_point_over_stdio() -> anyhow::Result<()> {
     client.cancel().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn resources_expose_branch_list_and_head() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+
+    // Seed only a `main` branch so HEAD is well-defined.
+    let store = SqliteStore::open(&db_path).await?;
+    let graph = ContextGraph::new(store);
+    graph
+        .commit_advancing_branch("main", Author::User, text("hi"), Metadata::new(Utc::now()))
+        .await?;
+
+    let client = spawn_client(&db_path).await?;
+    let resources = client.list_all_resources().await?;
+    let uris: Vec<String> = resources.iter().map(|r| r.uri.clone()).collect();
+    assert!(uris.contains(&"contextgraph://branches".to_string()));
+    assert!(uris.contains(&"contextgraph://head".to_string()));
+
+    let head = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            "contextgraph://head",
+        ))
+        .await?;
+    let head_text = match &head.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        other => panic!("expected text resource contents, got {other:?}"),
+    };
+    assert_eq!(head_text.len(), 64); // a hex commit id
+
+    client.cancel().await?;
+    Ok(())
+}
