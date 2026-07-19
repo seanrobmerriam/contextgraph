@@ -32,3 +32,13 @@ impl LogFilter {
             .all(|(k, v)| commit.metadata.tags.get(k) == Some(v))
     }
 }
+
+/// A page of `log` results, newest (closest to the requested head) first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LogPage {
+    pub commits: Vec<Commit>,
+    /// Total commits matching the filter, before pagination.
+    pub total_matched: usize,
+    pub has_more: bool,
+}
+
