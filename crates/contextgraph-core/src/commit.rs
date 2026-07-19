@@ -91,3 +91,13 @@ mod hex {
         Ok(out)
     }
 }
+
+/// Who authored a commit's delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Author {
+    User,
+    Assistant,
+    Tool,
+    System,
+}
