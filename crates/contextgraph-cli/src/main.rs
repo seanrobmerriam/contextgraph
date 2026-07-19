@@ -98,3 +98,40 @@ fn parse_author(s: &str) -> Result<Author, String> {
         )),
     }
 }
+
+fn parse_strategy(s: &str) -> Result<MergeStrategy, String> {
+    match s {
+        "record-only" => Ok(MergeStrategy::RecordOnly),
+        "prefer-other" => Ok(MergeStrategy::PreferOther),
+        other => Err(format!(
+            "unknown strategy '{other}': expected record-only or prefer-other"
+        )),
+    }
+}
+
+fn parse_tag(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| format!("tag '{s}' must be in KEY=VALUE form"))
+}
+
+/// A bare hex commit id is treated as a commit; anything else is a branch
+/// name (mirroring git's "looks like a SHA vs. looks like a ref" heuristic).
+fn parse_ref(s: &str) -> CheckoutTarget {
+    match CommitId::from_str(s) {
+        Ok(id) => CheckoutTarget::Commit(id),
+        Err(_) => CheckoutTarget::Branch(s.to_string()),
+    }
+}
+
+fn describe_delta(delta: &Delta) -> String {
+    match delta {
+        Delta::Message { content } => content.clone(),
+        Delta::ToolCall { name, call_id, .. } => format!("tool_call {name} ({call_id})"),
+        Delta::ToolResult { call_id, .. } => format!("tool_result ({call_id})"),
+        Delta::Compaction { summary, replaces } => {
+            format!("[compaction of {} commit(s)] {summary}", replaces.len())
+        }
+        Delta::Merge { strategy } => format!("[merge: {strategy:?}]"),
+    }
+}
