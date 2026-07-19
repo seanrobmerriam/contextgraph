@@ -21,3 +21,31 @@ pub enum DiffOp {
     /// Present only in `from` (the "old" side).
     Removed(MaterializedMessage),
 }
+
+/// A structural diff between two materialized contexts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextDiff {
+    pub from: CommitId,
+    pub to: CommitId,
+    pub ops: Vec<DiffOp>,
+}
+
+impl ContextDiff {
+    pub fn added(&self) -> impl Iterator<Item = &MaterializedMessage> {
+        self.ops.iter().filter_map(|op| match op {
+            DiffOp::Added(m) => Some(m),
+            _ => None,
+        })
+    }
+
+    pub fn removed(&self) -> impl Iterator<Item = &MaterializedMessage> {
+        self.ops.iter().filter_map(|op| match op {
+            DiffOp::Removed(m) => Some(m),
+            _ => None,
+        })
+    }
+
+    pub fn is_identical(&self) -> bool {
+        self.ops.iter().all(|op| matches!(op, DiffOp::Common(_)))
+    }
+}
