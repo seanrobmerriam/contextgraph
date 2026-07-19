@@ -185,3 +185,22 @@ impl CommitStore for InMemoryGraphStore {
         self.commits.remove_many(ids).await
     }
 }
+
+#[async_trait]
+impl RefStore for InMemoryGraphStore {
+    async fn get_branch(&self, name: &str) -> Result<Option<CommitId>> {
+        self.refs.get_branch(name).await
+    }
+
+    async fn set_branch(&self, name: &str, commit_id: CommitId) -> Result<()> {
+        self.refs.set_branch(name, commit_id).await
+    }
+
+    async fn delete_branch(&self, name: &str) -> Result<()> {
+        self.refs.delete_branch(name).await
+    }
+
+    async fn list_branches(&self) -> Result<Vec<(String, CommitId)>> {
+        self.refs.list_branches().await
+    }
+}
