@@ -23,3 +23,77 @@ impl InMemoryCommitStore {
         GraphError::Storage("in-memory commit store lock poisoned".into())
     }
 }
+
+#[async_trait]
+impl CommitStore for InMemoryCommitStore {
+    async fn put(&self, commit: Commit) -> Result<CommitId> {
+        let mut commits = self.commits.write().map_err(Self::lock_err)?;
+
+        if commits.contains_key(&commit.id) {
+            return Ok(commit.id);
+        }
+
+        for parent in &commit.parent_ids {
+            if !commits.contains_key(parent) {
+                return Err(GraphError::ParentNotFound(*parent));
+            }
+        }
+
+        let id = commit.id;
+        let parent_ids = commit.parent_ids.clone();
+        commits.insert(id, commit);
+        drop(commits);
+
+        let mut children = self.children.write().map_err(Self::lock_err)?;
+        for parent in parent_ids {
+            children.entry(parent).or_default().insert(id);
+        }
+        children.entry(id).or_default();
+
+        Ok(id)
+    }
+
+    async fn get(&self, id: &CommitId) -> Result<Option<Commit>> {
+        let commits = self.commits.read().map_err(Self::lock_err)?;
+        Ok(commits.get(id).cloned())
+    }
+
+    async fn contains(&self, id: &CommitId) -> Result<bool> {
+        let commits = self.commits.read().map_err(Self::lock_err)?;
+        Ok(commits.contains_key(id))
+    }
+
+    async fn children(&self, id: &CommitId) -> Result<Vec<CommitId>> {
+        let children = self.children.read().map_err(Self::lock_err)?;
+        Ok(children
+            .get(id)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default())
+    }
+
+    async fn len(&self) -> Result<usize> {
+        let commits = self.commits.read().map_err(Self::lock_err)?;
+        Ok(commits.len())
+    }
+
+    async fn all_ids(&self) -> Result<Vec<CommitId>> {
+        let commits = self.commits.read().map_err(Self::lock_err)?;
+        Ok(commits.keys().copied().collect())
+    }
+
+    async fn remove_many(&self, ids: &[CommitId]) -> Result<()> {
+        let mut commits = self.commits.write().map_err(Self::lock_err)?;
+        let mut children = self.children.write().map_err(Self::lock_err)?;
+        for id in ids {
+            if let Some(commit) = commits.remove(id) {
+                for parent in &commit.parent_ids {
+                    if let Some(set) = children.get_mut(parent) {
+                        set.remove(id);
+                    }
+                }
+            }
+            children.remove(id);
+        }
+        Ok(())
+    }
+}
