@@ -196,3 +196,13 @@ impl Metadata {
         self
     }
 }
+
+/// The canonical, hashed shape of a commit's content (everything except its
+/// own id, which is derived from this).
+#[derive(Serialize)]
+struct CommitContent<'a> {
+    parent_ids: &'a [CommitId],
+    author: &'a Author,
+    delta: &'a Delta,
+    metadata: &'a Metadata,
+}
