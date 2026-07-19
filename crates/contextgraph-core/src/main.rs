@@ -124,3 +124,118 @@ impl ContextGraphMcp {
         }
     }
 }
+
+#[tool_router]
+impl ContextGraphMcp {
+    #[tool(
+        description = "Create a new branch at an existing commit or branch head. This is the primary verb for A/B'ing a decision point: try two continuations from the same commit by forking twice."
+    )]
+    async fn fork(
+        &self,
+        Parameters(ForkParams {
+            from,
+            new_branch_name,
+        }): Parameters<ForkParams>,
+    ) -> Result<String, McpError> {
+        let from_id = self
+            .graph
+            .resolve(&parse_ref(&from))
+            .await
+            .map_err(mcp_err)?;
+        self.graph
+            .fork(from_id, &new_branch_name)
+            .await
+            .map_err(mcp_err)?;
+        Ok(format!(
+            "forked '{new_branch_name}' at {}",
+            from_id.to_hex()
+        ))
+    }
+
+    #[tool(
+        description = "Materialize the ordered message list a model would see at a commit or branch, as JSON."
+    )]
+    async fn checkout(
+        &self,
+        Parameters(CheckoutParams { target }): Parameters<CheckoutParams>,
+    ) -> Result<String, McpError> {
+        let ctx = self
+            .graph
+            .checkout(parse_ref(&target))
+            .await
+            .map_err(mcp_err)?;
+        to_json(&ctx)
+    }
+
+    #[tool(
+        description = "Structural diff between two commits and/or branches (which turns were added/removed/common), as JSON."
+    )]
+    async fn diff(
+        &self,
+        Parameters(DiffParams { a, b }): Parameters<DiffParams>,
+    ) -> Result<String, McpError> {
+        let d = self
+            .graph
+            .diff(parse_ref(&a), parse_ref(&b))
+            .await
+            .map_err(mcp_err)?;
+        to_json(&d)
+    }
+
+    #[tool(
+        description = "Walk ancestry history from a commit or a branch's current head, newest-first, with metadata-tag filtering and offset/limit pagination, as JSON."
+    )]
+    async fn log(
+        &self,
+        Parameters(LogParams {
+            target,
+            tags,
+            offset,
+            limit,
+        }): Parameters<LogParams>,
+    ) -> Result<String, McpError> {
+        let mut filter = LogFilter::new();
+        for (k, v) in tags {
+            filter = filter.with_tag(k, v);
+        }
+        let page = self
+            .graph
+            .log(parse_ref(&target), &filter, offset, limit)
+            .await
+            .map_err(mcp_err)?;
+        to_json(&page)
+    }
+
+    #[tool(
+        description = "Binary-search the ancestry between a good and a bad commit for where a substring disappears from the latest message -- git-bisect for agent runs. Returns the last-good/first-bad commit pair, or 'no flip found'."
+    )]
+    async fn bisect(
+        &self,
+        Parameters(BisectParams {
+            good,
+            bad,
+            contains,
+        }): Parameters<BisectParams>,
+    ) -> Result<String, McpError> {
+        let good_id = self
+            .graph
+            .resolve(&parse_ref(&good))
+            .await
+            .map_err(mcp_err)?;
+        let bad_id = self
+            .graph
+            .resolve(&parse_ref(&bad))
+            .await
+            .map_err(mcp_err)?;
+        let outcome = self
+            .graph
+            .bisect(good_id, bad_id, |ctx| {
+                ctx.messages
+                    .last()
+                    .is_some_and(|m| describe_delta(&m.delta).contains(&contains))
+            })
+            .await
+            .map_err(mcp_err)?;
+        to_json(&outcome)
+    }
+}
