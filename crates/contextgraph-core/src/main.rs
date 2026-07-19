@@ -90,3 +90,7 @@ struct LogParams {
     #[serde(default = "default_log_limit")]
     limit: usize,
 }
+
+fn default_log_limit() -> usize {
+    20
+}
