@@ -247,3 +247,27 @@ async fn resources_expose_branch_list_and_head() -> anyhow::Result<()> {
     client.cancel().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn checking_out_a_nonexistent_branch_returns_a_tool_error() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+    seed_fixture(&db_path).await?;
+
+    let client = spawn_client(&db_path).await?;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("checkout")
+                .with_arguments(call_args(&[("target", "no-such-branch")])),
+        )
+        .await;
+
+    // Either a protocol-level error or a tool-level isError result is
+    // acceptable, but it must not silently succeed.
+    if let Ok(r) = result {
+        assert!(r.is_error.unwrap_or(false));
+    }
+
+    client.cancel().await?;
+    Ok(())
+}
