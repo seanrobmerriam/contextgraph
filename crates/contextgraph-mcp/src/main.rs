@@ -55,3 +55,38 @@ fn describe_delta(delta: &Delta) -> String {
         Delta::Merge { strategy } => format!("[merge: {strategy:?}]"),
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ForkParams {
+    /// The commit or branch to fork from.
+    from: String,
+    /// Name of the new branch to create at that point.
+    new_branch_name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CheckoutParams {
+    /// A branch name or a hex commit id.
+    target: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DiffParams {
+    /// A branch name or a hex commit id (the "old"/"from" side).
+    a: String,
+    /// A branch name or a hex commit id (the "new"/"to" side).
+    b: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LogParams {
+    /// A branch name or a hex commit id to walk ancestry from.
+    target: String,
+    /// Only include commits carrying all of these metadata tags (exact match).
+    #[serde(default)]
+    tags: BTreeMap<String, String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_log_limit")]
+    limit: usize,
+}
