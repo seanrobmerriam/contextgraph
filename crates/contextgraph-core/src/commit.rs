@@ -162,3 +162,10 @@ pub enum MergeStrategy {
     /// The merge commit materializes as `branch_b`'s view instead.
     PreferOther,
 }
+
+/// Token accounting for a commit, if the caller supplies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
