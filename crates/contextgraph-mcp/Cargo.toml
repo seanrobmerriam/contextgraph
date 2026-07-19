@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 description = "MCP server exposing contextgraph operations as tools"
 readme = "../../README.md"
-keywords = ["contextgraph", "mcp", "agent", "llm", "model-context-protocol"]
+keywords = ["contextgraph", "mcp", "agent", "llm", "mcp-server"]
 categories = ["api-bindings", "database"]
 publish = true
 
