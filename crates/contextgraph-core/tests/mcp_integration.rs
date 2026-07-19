@@ -83,3 +83,21 @@ async fn seed_fixture(db_path: &str) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+fn call_args(pairs: &[(&str, &str)]) -> serde_json::Map<String, Value> {
+    let mut map = serde_json::Map::new();
+    for (k, v) in pairs {
+        map.insert(k.to_string(), Value::String(v.to_string()));
+    }
+    map
+}
+
+fn text_of(result: &rmcp::model::CallToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
