@@ -226,3 +226,200 @@ pub fn compute_commit_id(
     let bytes = serde_json::to_vec(&content).expect("commit content is always serializable");
     CommitId(*blake3::hash(&bytes).as_bytes())
 }
+
+/// An immutable, content-addressed node in the context DAG.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Commit {
+    pub id: CommitId,
+    pub parent_ids: Vec<CommitId>,
+    pub author: Author,
+    pub delta: Delta,
+    pub metadata: Metadata,
+}
+
+impl Commit {
+    /// Builds a new commit, computing its content-addressed id.
+    pub fn new(
+        parent_ids: Vec<CommitId>,
+        author: Author,
+        delta: Delta,
+        metadata: Metadata,
+    ) -> Self {
+        let id = compute_commit_id(&parent_ids, &author, &delta, &metadata);
+        Self {
+            id,
+            parent_ids,
+            author,
+            delta,
+            metadata,
+        }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.parent_ids.is_empty()
+    }
+
+    pub fn is_merge(&self) -> bool {
+        self.parent_ids.len() > 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn identical_content_yields_identical_commit_id() {
+        let delta = Delta::Message {
+            content: "hello".into(),
+        };
+        let meta = Metadata::new(ts()).with_tag("step", "planning");
+        let id1 = compute_commit_id(&[], &Author::User, &delta, &meta);
+        let id2 = compute_commit_id(&[], &Author::User, &delta, &meta);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn different_delta_content_yields_different_commit_id() {
+        let meta = Metadata::new(ts());
+        let id1 = compute_commit_id(
+            &[],
+            &Author::User,
+            &Delta::Message {
+                content: "a".into(),
+            },
+            &meta,
+        );
+        let id2 = compute_commit_id(
+            &[],
+            &Author::User,
+            &Delta::Message {
+                content: "b".into(),
+            },
+            &meta,
+        );
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn tag_insertion_order_does_not_affect_commit_id() {
+        let delta = Delta::Message {
+            content: "hi".into(),
+        };
+        let mut meta_a = Metadata::new(ts());
+        meta_a.tags.insert("a".into(), "1".into());
+        meta_a.tags.insert("b".into(), "2".into());
+
+        let mut meta_b = Metadata::new(ts());
+        meta_b.tags.insert("b".into(), "2".into());
+        meta_b.tags.insert("a".into(), "1".into());
+
+        let id_a = compute_commit_id(&[], &Author::User, &delta, &meta_a);
+        let id_b = compute_commit_id(&[], &Author::User, &delta, &meta_b);
+        assert_eq!(id_a, id_b);
+    }
+
+    #[test]
+    fn different_parent_order_yields_different_commit_id() {
+        let delta = Delta::Message {
+            content: "merge".into(),
+        };
+        let meta = Metadata::new(ts());
+        let p1 = CommitId([1u8; 32]);
+        let p2 = CommitId([2u8; 32]);
+        let id_ab = compute_commit_id(&[p1, p2], &Author::System, &delta, &meta);
+        let id_ba = compute_commit_id(&[p2, p1], &Author::System, &delta, &meta);
+        assert_ne!(
+            id_ab, id_ba,
+            "parent order is semantically significant for merges"
+        );
+    }
+
+    #[test]
+    fn commit_id_round_trips_through_hex_string() {
+        let id = CommitId([42u8; 32]);
+        let hex = id.to_hex();
+        let parsed: CommitId = hex.parse().unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn commit_id_from_str_rejects_wrong_length() {
+        let err = CommitId::from_str("abcd").unwrap_err();
+        assert!(matches!(err, GraphError::InvalidCommitId(_)));
+    }
+
+    #[test]
+    fn commit_id_from_str_rejects_non_hex_characters() {
+        let bad = "zz".repeat(32);
+        let err = CommitId::from_str(&bad).unwrap_err();
+        assert!(matches!(err, GraphError::InvalidCommitId(_)));
+    }
+
+    #[test]
+    fn root_commit_has_no_parents_and_is_recognized_as_root() {
+        let commit = Commit::new(
+            vec![],
+            Author::System,
+            Delta::Message {
+                content: "init".into(),
+            },
+            Metadata::new(ts()),
+        );
+        assert!(commit.is_root());
+        assert!(!commit.is_merge());
+    }
+
+    #[test]
+    fn commit_with_two_parents_is_recognized_as_merge() {
+        let commit = Commit::new(
+            vec![CommitId([1; 32]), CommitId([2; 32])],
+            Author::System,
+            Delta::Message {
+                content: "merge".into(),
+            },
+            Metadata::new(ts()),
+        );
+        assert!(commit.is_merge());
+        assert!(!commit.is_root());
+    }
+
+    #[test]
+    fn committing_identical_content_twice_is_idempotent_at_the_id_level() {
+        let meta = Metadata::new(ts());
+        let c1 = Commit::new(
+            vec![],
+            Author::User,
+            Delta::Message {
+                content: "x".into(),
+            },
+            meta.clone(),
+        );
+        let c2 = Commit::new(
+            vec![],
+            Author::User,
+            Delta::Message {
+                content: "x".into(),
+            },
+            meta,
+        );
+        assert_eq!(c1.id, c2.id);
+    }
+
+    #[test]
+    fn empty_message_delta_is_representable_and_hashes_consistently() {
+        let meta = Metadata::new(ts());
+        let delta = Delta::Message {
+            content: String::new(),
+        };
+        let id1 = compute_commit_id(&[], &Author::User, &delta, &meta);
+        let id2 = compute_commit_id(&[], &Author::User, &delta, &meta);
+        assert_eq!(id1, id2);
+    }
+}
