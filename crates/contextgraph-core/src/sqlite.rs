@@ -147,3 +147,152 @@ impl SqliteStore {
         })
     }
 }
+
+#[async_trait]
+impl CommitStore for SqliteStore {
+    async fn put(&self, commit: Commit) -> Result<CommitId> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+
+        let existing = sqlx::query("SELECT id FROM commits WHERE id = ?")
+            .bind(commit.id.to_hex())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        if existing.is_some() {
+            tx.commit()
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+            return Ok(commit.id);
+        }
+
+        for parent in &commit.parent_ids {
+            let found = sqlx::query("SELECT id FROM commits WHERE id = ?")
+                .bind(parent.to_hex())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+            if found.is_none() {
+                return Err(GraphError::ParentNotFound(*parent));
+            }
+        }
+
+        let author_json = serde_json::to_string(&commit.author)?;
+        let delta_json = serde_json::to_string(&commit.delta)?;
+        let metadata_json = serde_json::to_string(&commit.metadata)?;
+        let parent_ids_json = Self::parent_ids_to_json(&commit.parent_ids);
+
+        sqlx::query(
+            "INSERT INTO commits (id, parent_ids, author, delta, metadata) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(commit.id.to_hex())
+        .bind(&parent_ids_json)
+        .bind(&author_json)
+        .bind(&delta_json)
+        .bind(&metadata_json)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| GraphError::Storage(e.to_string()))?;
+
+        for parent in &commit.parent_ids {
+            sqlx::query("INSERT OR IGNORE INTO edges (parent_id, child_id) VALUES (?, ?)")
+                .bind(parent.to_hex())
+                .bind(commit.id.to_hex())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        Ok(commit.id)
+    }
+
+    async fn get(&self, id: &CommitId) -> Result<Option<Commit>> {
+        let row =
+            sqlx::query("SELECT id, parent_ids, author, delta, metadata FROM commits WHERE id = ?")
+                .bind(id.to_hex())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+
+        match row {
+            None => Ok(None),
+            Some(row) => Ok(Some(Self::row_to_commit(
+                row.get("id"),
+                row.get("parent_ids"),
+                row.get("author"),
+                row.get("delta"),
+                row.get("metadata"),
+            )?)),
+        }
+    }
+
+    async fn contains(&self, id: &CommitId) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM commits WHERE id = ?")
+            .bind(id.to_hex())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        Ok(row.is_some())
+    }
+
+    async fn children(&self, id: &CommitId) -> Result<Vec<CommitId>> {
+        let rows = sqlx::query("SELECT child_id FROM edges WHERE parent_id = ?")
+            .bind(id.to_hex())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        rows.into_iter()
+            .map(|r| CommitId::from_str(r.get::<String, _>("child_id").as_str()))
+            .collect()
+    }
+
+    async fn len(&self) -> Result<usize> {
+        let row = sqlx::query("SELECT COUNT(*) as c FROM commits")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        let c: i64 = row.get("c");
+        Ok(c as usize)
+    }
+
+    async fn all_ids(&self) -> Result<Vec<CommitId>> {
+        let rows = sqlx::query("SELECT id FROM commits")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        rows.into_iter()
+            .map(|r| CommitId::from_str(r.get::<String, _>("id").as_str()))
+            .collect()
+    }
+
+    async fn remove_many(&self, ids: &[CommitId]) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        for id in ids {
+            sqlx::query("DELETE FROM edges WHERE parent_id = ? OR child_id = ?")
+                .bind(id.to_hex())
+                .bind(id.to_hex())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+            sqlx::query("DELETE FROM commits WHERE id = ?")
+                .bind(id.to_hex())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| GraphError::Storage(e.to_string()))?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        Ok(())
+    }
+}
