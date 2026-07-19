@@ -135,3 +135,269 @@ fn describe_delta(delta: &Delta) -> String {
         Delta::Merge { strategy } => format!("[merge: {strategy:?}]"),
     }
 }
+
+type Graph = ContextGraph<SqliteStore>;
+
+async fn resolve_commit_id(graph: &Graph, s: &str) -> Result<CommitId, GraphError> {
+    graph.resolve(&parse_ref(s)).await
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    let store = SqliteStore::open(&cli.db).await?;
+    let graph = ContextGraph::new(store);
+    run(&graph, cli.command, cli.json).await
+}
+
+async fn run(
+    graph: &Graph,
+    command: Command,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        Command::Commit {
+            branch,
+            parent,
+            author,
+            message,
+            tags,
+        } => {
+            let mut metadata = Metadata::new(chrono::Utc::now());
+            for (k, v) in tags {
+                metadata = metadata.with_tag(k, v);
+            }
+            let delta = Delta::Message { content: message };
+
+            let id = if let Some(branch_name) = branch {
+                graph
+                    .commit_advancing_branch(&branch_name, author, delta, metadata)
+                    .await?
+            } else if let Some(parent_ref) = parent {
+                let parent_id = resolve_commit_id(graph, &parent_ref).await?;
+                graph
+                    .commit(Some(parent_id), author, delta, metadata)
+                    .await?
+            } else {
+                graph.commit(None, author, delta, metadata).await?
+            };
+
+            if json {
+                println!("{}", serde_json::json!({ "commit_id": id.to_hex() }));
+            } else {
+                println!("{}", id.to_hex());
+            }
+        }
+
+        Command::Branch { name, at } => {
+            let at_id = resolve_commit_id(graph, &at).await?;
+            graph.branch(&name, at_id).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "branch": name, "commit_id": at_id.to_hex() })
+                );
+            } else {
+                println!("created branch '{name}' at {}", at_id.to_hex());
+            }
+        }
+
+        Command::Branches => {
+            let branches = graph.list_branches().await?;
+            if json {
+                let obj: serde_json::Value = branches
+                    .iter()
+                    .map(|(n, id)| (n.clone(), serde_json::Value::String(id.to_hex())))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                for (name, id) in branches {
+                    println!("{name}\t{}", id.to_hex());
+                }
+            }
+        }
+
+        Command::MoveBranch { name, to } => {
+            let to_id = resolve_commit_id(graph, &to).await?;
+            graph.move_branch(&name, to_id).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "branch": name, "commit_id": to_id.to_hex() })
+                );
+            } else {
+                println!("moved '{name}' to {}", to_id.to_hex());
+            }
+        }
+
+        Command::DeleteBranch { name } => {
+            graph.delete_branch(&name).await?;
+            if json {
+                println!("{}", serde_json::json!({ "deleted": name }));
+            } else {
+                println!("deleted branch '{name}'");
+            }
+        }
+
+        Command::Fork { from, name } => {
+            let from_id = resolve_commit_id(graph, &from).await?;
+            graph.fork(from_id, &name).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "branch": name, "commit_id": from_id.to_hex() })
+                );
+            } else {
+                println!("forked '{name}' at {}", from_id.to_hex());
+            }
+        }
+
+        Command::Rollback { branch, to } => {
+            let to_id = resolve_commit_id(graph, &to).await?;
+            graph.rollback(&branch, to_id).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "branch": branch, "commit_id": to_id.to_hex() })
+                );
+            } else {
+                println!("rolled back '{branch}' to {}", to_id.to_hex());
+            }
+        }
+
+        Command::Checkout { target } => {
+            let ctx = graph.checkout(parse_ref(&target)).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&ctx)?);
+            } else {
+                for m in &ctx.messages {
+                    println!("[{}] {}", m.author, describe_delta(&m.delta));
+                }
+            }
+        }
+
+        Command::Show { commit } => {
+            let id = resolve_commit_id(graph, &commit).await?;
+            let c = graph
+                .store()
+                .get(&id)
+                .await?
+                .ok_or(GraphError::CommitNotFound(id))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                println!("commit {}", c.id.to_hex());
+                println!("author: {}", c.author);
+                println!(
+                    "parents: {}",
+                    c.parent_ids
+                        .iter()
+                        .map(|p| p.to_hex())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                println!("delta: {}", describe_delta(&c.delta));
+            }
+        }
+
+        Command::Log {
+            target,
+            tags,
+            offset,
+            limit,
+        } => {
+            let mut filter = LogFilter::new();
+            for (k, v) in tags {
+                filter = filter.with_tag(k, v);
+            }
+            let page = graph
+                .log(parse_ref(&target), &filter, offset, limit)
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&page)?);
+            } else {
+                for c in &page.commits {
+                    println!("{}  {}", c.id.to_hex(), describe_delta(&c.delta));
+                }
+                println!("({} total, has_more={})", page.total_matched, page.has_more);
+            }
+        }
+
+        Command::Diff { a, b } => {
+            let d = graph.diff(parse_ref(&a), parse_ref(&b)).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&d)?);
+            } else {
+                use contextgraph_core::diff::DiffOp;
+                for op in &d.ops {
+                    match op {
+                        DiffOp::Common(m) => println!("  {}", describe_delta(&m.delta)),
+                        DiffOp::Added(m) => println!("+ {}", describe_delta(&m.delta)),
+                        DiffOp::Removed(m) => println!("- {}", describe_delta(&m.delta)),
+                    }
+                }
+            }
+        }
+
+        Command::Merge {
+            branch_a,
+            branch_b,
+            strategy,
+        } => {
+            let id = graph.merge(&branch_a, &branch_b, strategy).await?;
+            if json {
+                println!("{}", serde_json::json!({ "commit_id": id.to_hex() }));
+            } else {
+                println!("merged '{branch_b}' into '{branch_a}' -> {}", id.to_hex());
+            }
+        }
+
+        Command::Bisect {
+            good,
+            bad,
+            contains,
+        } => {
+            let good_id = resolve_commit_id(graph, &good).await?;
+            let bad_id = resolve_commit_id(graph, &bad).await?;
+            // Checks the *current* state (the latest message), not whether
+            // the substring ever appeared anywhere in history — bisecting
+            // "does the plan still reference X" is about the live tail of
+            // context, not its full past.
+            let outcome = graph
+                .bisect(good_id, bad_id, |ctx| {
+                    ctx.messages
+                        .last()
+                        .is_some_and(|m| describe_delta(&m.delta).contains(&contains))
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&outcome)?);
+            } else {
+                use contextgraph_core::bisect::BisectOutcome;
+                match outcome {
+                    BisectOutcome::Flip(r) => println!(
+                        "flip found: last_good={} first_bad={} ({} predicate call(s))",
+                        r.last_good.to_hex(),
+                        r.first_bad.to_hex(),
+                        r.predicate_calls
+                    ),
+                    BisectOutcome::NoFlip => println!("no flip found"),
+                }
+            }
+        }
+
+        Command::Gc => {
+            let removed = graph.gc().await?;
+            if json {
+                let ids: Vec<String> = removed.iter().map(|id| id.to_hex()).collect();
+                println!("{}", serde_json::to_string_pretty(&ids)?);
+            } else {
+                println!("removed {} unreachable commit(s)", removed.len());
+                for id in removed {
+                    println!("  {}", id.to_hex());
+                }
+            }
+        }
+    }
+    Ok(())
+}
