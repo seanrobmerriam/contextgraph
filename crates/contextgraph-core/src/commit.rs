@@ -180,3 +180,19 @@ pub struct Metadata {
     /// that serialization (and therefore the content hash) is order-independent.
     pub tags: BTreeMap<String, String>,
 }
+
+impl Metadata {
+    pub fn new(timestamp: DateTime<Utc>) -> Self {
+        Self {
+            model_id: None,
+            token_usage: None,
+            timestamp,
+            tags: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_tag(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.tags.insert(key.into(), value.into());
+        self
+    }
+}
