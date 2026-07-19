@@ -5,13 +5,17 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "CLI for contextgraph, the versioned context store"
+readme = "../../README.md"
+keywords = ["contextgraph", "cli", "agent", "llm", "version-control"]
+categories = ["command-line-utilities", "database"]
+publish = true
 
 [[bin]]
 name = "contextgraph"
 path = "src/main.rs"
 
 [dependencies]
-contextgraph-core = { path = "../contextgraph-core" }
+contextgraph-core = { path = "../contextgraph-core", version = "0.1.0" }
 clap.workspace = true
 chrono.workspace = true
 serde_json.workspace = true

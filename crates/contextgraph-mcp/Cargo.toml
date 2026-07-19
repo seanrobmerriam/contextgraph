@@ -5,13 +5,17 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "MCP server exposing contextgraph operations as tools"
+readme = "../../README.md"
+keywords = ["contextgraph", "mcp", "agent", "llm", "model-context-protocol"]
+categories = ["api-bindings", "database"]
+publish = true
 
 [[bin]]
 name = "contextgraph-mcp"
 path = "src/main.rs"
 
 [dependencies]
-contextgraph-core = { path = "../contextgraph-core" }
+contextgraph-core = { path = "../contextgraph-core", version = "0.1.0" }
 tokio.workspace = true
 rmcp = { version = "2", features = ["server", "transport-io"] }
 schemars = "1"

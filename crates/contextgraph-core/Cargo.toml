@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Versioned, git-like context store for LLM agent conversations"
+readme = "../../README.md"
+keywords = ["contextgraph", "dag", "agent", "llm", "version-control"]
+categories = ["data-structures", "database"]
+publish = true
 
 [dependencies]
 blake3.workspace = true
