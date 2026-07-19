@@ -37,3 +37,30 @@ pub struct BisectResult {
     /// Number of predicate evaluations performed (for verifying O(log n)).
     pub predicate_calls: usize,
 }
+
+/// Walks the first-parent ancestry from `bad` back to `good`, returning the
+/// path in root-to-descendant order (`good` first, `bad` last). Fails if
+/// `good` is not on `bad`'s first-parent ancestry path.
+async fn ancestry_path<S: CommitStore + ?Sized>(
+    store: &S,
+    good: CommitId,
+    bad: CommitId,
+) -> Result<Vec<CommitId>> {
+    let mut path = vec![bad];
+    let mut current = bad;
+    while current != good {
+        let commit = store
+            .get(&current)
+            .await?
+            .ok_or(GraphError::CommitNotFound(current))?;
+        match commit.parent_ids.first() {
+            Some(parent) => {
+                current = *parent;
+                path.push(current);
+            }
+            None => return Err(GraphError::InvalidBisectRange(good, bad)),
+        }
+    }
+    path.reverse();
+    Ok(path)
+}
