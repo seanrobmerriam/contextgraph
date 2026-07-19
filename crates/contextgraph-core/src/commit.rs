@@ -45,3 +45,16 @@ impl FromStr for CommitId {
         Ok(CommitId(arr))
     }
 }
+
+impl TryFrom<String> for CommitId {
+    type Error = GraphError;
+    fn try_from(value: String) -> Result<Self> {
+        CommitId::from_str(&value)
+    }
+}
+
+impl From<CommitId> for String {
+    fn from(value: CommitId) -> Self {
+        value.to_hex()
+    }
+}
