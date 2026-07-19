@@ -29,3 +29,29 @@ use contextgraph_core::log::LogFilter;
 use contextgraph_core::sqlite::SqliteStore;
 use contextgraph_core::{CommitId, GraphError, RefStore};
 
+/// A bare hex commit id is a commit; anything else is a branch name (same
+/// heuristic the CLI uses).
+fn parse_ref(s: &str) -> CheckoutTarget {
+    match CommitId::from_str(s) {
+        Ok(id) => CheckoutTarget::Commit(id),
+        Err(_) => CheckoutTarget::Branch(s.to_string()),
+    }
+}
+
+fn mcp_err(e: GraphError) -> McpError {
+    McpError::invalid_params(e.to_string(), None)
+}
+
+fn to_json(value: &impl serde::Serialize) -> Result<String, McpError> {
+    serde_json::to_string_pretty(value).map_err(|e| McpError::internal_error(e.to_string(), None))
+}
+
+fn describe_delta(delta: &Delta) -> String {
+    match delta {
+        Delta::Message { content } => content.clone(),
+        Delta::ToolCall { name, call_id, .. } => format!("tool_call {name} ({call_id})"),
+        Delta::ToolResult { call_id, .. } => format!("tool_result ({call_id})"),
+        Delta::Compaction { summary, .. } => summary.clone(),
+        Delta::Merge { strategy } => format!("[merge: {strategy:?}]"),
+    }
+}
