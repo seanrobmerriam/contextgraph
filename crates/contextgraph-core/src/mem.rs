@@ -204,3 +204,124 @@ impl RefStore for InMemoryGraphStore {
         self.refs.list_branches().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::{Author, Delta, Metadata};
+    use chrono::Utc;
+
+    fn root() -> Commit {
+        Commit::new(
+            vec![],
+            Author::System,
+            Delta::Message {
+                content: "root".into(),
+            },
+            Metadata::new(Utc::now()),
+        )
+    }
+
+    #[tokio::test]
+    async fn putting_a_commit_with_nonexistent_parent_fails() {
+        let store = InMemoryCommitStore::new();
+        let orphan = Commit::new(
+            vec![CommitId([9; 32])],
+            Author::User,
+            Delta::Message {
+                content: "x".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        let err = store.put(orphan).await.unwrap_err();
+        assert!(matches!(err, GraphError::ParentNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn putting_root_commit_succeeds_and_is_retrievable() {
+        let store = InMemoryCommitStore::new();
+        let r = root();
+        let id = store.put(r.clone()).await.unwrap();
+        assert_eq!(id, r.id);
+        let fetched = store.get(&id).await.unwrap().unwrap();
+        assert_eq!(fetched, r);
+    }
+
+    #[tokio::test]
+    async fn putting_identical_commit_twice_does_not_duplicate_storage() {
+        let store = InMemoryCommitStore::new();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        store.put(r.clone()).await.unwrap();
+        assert_eq!(store.len().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn child_commit_is_indexed_under_its_parent() {
+        let store = InMemoryCommitStore::new();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        let child = Commit::new(
+            vec![r.id],
+            Author::User,
+            Delta::Message {
+                content: "hi".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        store.put(child.clone()).await.unwrap();
+        let kids = store.children(&r.id).await.unwrap();
+        assert_eq!(kids, vec![child.id]);
+    }
+
+    #[tokio::test]
+    async fn getting_nonexistent_commit_returns_none_not_error() {
+        let store = InMemoryCommitStore::new();
+        let result = store.get(&CommitId([1; 32])).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn branching_at_a_commit_then_reading_it_back_round_trips() {
+        let refs = InMemoryRefStore::new();
+        let id = CommitId([1; 32]);
+        refs.set_branch("main", id).await.unwrap();
+        assert_eq!(refs.get_branch("main").await.unwrap(), Some(id));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_nonexistent_branch_fails() {
+        let refs = InMemoryRefStore::new();
+        let err = refs.delete_branch("nope").await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn moving_a_branch_pointer_overwrites_the_previous_target() {
+        let refs = InMemoryRefStore::new();
+        let a = CommitId([1; 32]);
+        let b = CommitId([2; 32]);
+        refs.set_branch("main", a).await.unwrap();
+        refs.set_branch("main", b).await.unwrap();
+        assert_eq!(refs.get_branch("main").await.unwrap(), Some(b));
+    }
+
+    #[tokio::test]
+    async fn removing_commits_cleans_up_child_index() {
+        let store = InMemoryCommitStore::new();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        let child = Commit::new(
+            vec![r.id],
+            Author::User,
+            Delta::Message {
+                content: "hi".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        store.put(child.clone()).await.unwrap();
+        store.remove_many(&[child.id]).await.unwrap();
+        assert_eq!(store.children(&r.id).await.unwrap(), Vec::<CommitId>::new());
+        assert_eq!(store.len().await.unwrap(), 1);
+    }
+}
