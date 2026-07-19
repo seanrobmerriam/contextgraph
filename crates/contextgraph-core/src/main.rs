@@ -322,3 +322,14 @@ impl ServerHandler for ContextGraphMcp {
         }
     }
 }
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let db_path =
+        std::env::var("CONTEXTGRAPH_DB").unwrap_or_else(|_| "contextgraph.db".to_string());
+    let store = SqliteStore::open(&db_path).await?;
+    let graph = ContextGraph::new(store);
+    let server = ContextGraphMcp::new(graph);
+    server.serve(stdio()).await?.waiting().await?;
+    Ok(())
+}
