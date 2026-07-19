@@ -167,3 +167,134 @@ mod tests {
             _ => unreachable!(),
         }
     }
+
+    fn index_of(ctx: &MaterializedContext) -> usize {
+        // The predicate operates on the tag of the *last* contributing
+        // commit's tag, which we look up via the manifest's tail — but tags
+        // live on Metadata, not on MaterializedMessage, so tests instead
+        // decode the index from the message content ("turn-N").
+        let last = ctx.messages.last().unwrap();
+        match &last.delta {
+            Delta::Message { content } => content
+                .strip_prefix("turn-")
+                .and_then(|s| s.parse().ok())
+                .unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
+    async fn bisect_flip_at(n: usize, flip_at: usize) -> (BisectOutcome, usize) {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, n).await;
+        let good = ids[0];
+        let bad = *ids.last().unwrap();
+        let mut calls = 0usize;
+        let outcome = bisect(&store, good, bad, |ctx| {
+            calls += 1;
+            index_of(ctx) < flip_at
+        })
+        .await
+        .unwrap();
+        (outcome, calls)
+    }
+
+    #[tokio::test]
+    async fn bisect_finds_the_exact_known_flip_point_in_a_small_chain() {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, 10).await;
+        let flip_at = 6; // predicate true for indices 0..6, false for 6..10
+        let outcome = bisect(&store, ids[0], *ids.last().unwrap(), |ctx| {
+            index_of(ctx) < flip_at
+        })
+        .await
+        .unwrap();
+
+        match outcome {
+            BisectOutcome::Flip(r) => {
+                assert_eq!(r.last_good, ids[flip_at - 1]);
+                assert_eq!(r.first_bad, ids[flip_at]);
+            }
+            BisectOutcome::NoFlip => panic!("expected a flip"),
+        }
+    }
+
+i#[tokio::test]
+    async fn bisect_over_two_commit_range_resolves_without_looping() {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, 2).await;
+        let outcome = bisect(&store, ids[0], ids[1], |ctx| index_of(ctx) < 1)
+            .await
+            .unwrap();
+        match outcome {
+            BisectOutcome::Flip(r) => {
+                assert_eq!(r.last_good, ids[0]);
+                assert_eq!(r.first_bad, ids[1]);
+            }
+            BisectOutcome::NoFlip => panic!("expected a flip"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bisect_over_a_single_commit_range_does_not_panic_or_underflow() {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, 1).await;
+        let outcome = bisect(&store, ids[0], ids[0], |_| true).await.unwrap();
+        assert_eq!(outcome, BisectOutcome::NoFlip);
+    }
+
+    #[tokio::test]
+    async fn bisect_with_a_predicate_that_never_flips_reports_no_flip_cleanly() {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, 8).await;
+        let outcome = bisect(&store, ids[0], *ids.last().unwrap(), |_| true)
+            .await
+            .unwrap();
+        assert_eq!(outcome, BisectOutcome::NoFlip);
+    }
+
+    #[tokio::test]
+    async fn bisect_where_good_already_exhibits_bad_behavior_reports_no_flip() {
+        let store = InMemoryCommitStore::new();
+        let ids = build_chain(&store, 5).await;
+        let outcome = bisect(&store, ids[0], *ids.last().unwrap(), |_| false)
+            .await
+            .unwrap();
+        assert_eq!(outcome, BisectOutcome::NoFlip);
+    }
+
+    #[tokio::test]
+    async fn bisect_from_a_commit_that_is_not_an_ancestor_fails() {
+        let store = InMemoryCommitStore::new();
+        let a = build_chain(&store, 3).await;
+        let unrelated = Commit::new(
+            vec![],
+            Author::User,
+            Delta::Message {
+                content: "unrelated".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        let unrelated_id = store.put(unrelated).await.unwrap();
+
+        let err = bisect(&store, unrelated_id, *a.last().unwrap(), |_| true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::InvalidBisectRange(_, _)));
+    }
+
+    #[tokio::test]
+    async fn bisect_performs_logarithmically_many_predicate_calls_across_sizes() {
+        // Power-of-two-adjacent sizes are where off-by-one bisect bugs
+        // cluster, so exercise a spread of them.
+        for &n in &[2usize, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            let flip_at = n / 2;
+            let (outcome, calls) = bisect_flip_at(n, flip_at.max(1)).await;
+            assert!(matches!(outcome, BisectOutcome::Flip(_)), "n={n}");
+            let max_expected = (n as f64).log2().ceil() as usize + 2;
+            assert!(
+                calls <= max_expected,
+                "n={n} used {calls} predicate calls, expected <= {max_expected}"
+            );
+        }
+    }
+}
