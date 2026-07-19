@@ -97,3 +97,45 @@ impl CommitStore for InMemoryCommitStore {
         Ok(())
     }
 }
+
+#[derive(Default)]
+pub struct InMemoryRefStore {
+    branches: RwLock<HashMap<String, CommitId>>,
+}
+
+impl InMemoryRefStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock_err(_: impl std::fmt::Debug) -> GraphError {
+        GraphError::Storage("in-memory ref store lock poisoned".into())
+    }
+}
+
+#[async_trait]
+impl RefStore for InMemoryRefStore {
+    async fn get_branch(&self, name: &str) -> Result<Option<CommitId>> {
+        let branches = self.branches.read().map_err(Self::lock_err)?;
+        Ok(branches.get(name).copied())
+    }
+
+    async fn set_branch(&self, name: &str, commit_id: CommitId) -> Result<()> {
+        let mut branches = self.branches.write().map_err(Self::lock_err)?;
+        branches.insert(name.to_string(), commit_id);
+        Ok(())
+    }
+
+    async fn delete_branch(&self, name: &str) -> Result<()> {
+        let mut branches = self.branches.write().map_err(Self::lock_err)?;
+        if branches.remove(name).is_none() {
+            return Err(GraphError::BranchNotFound(name.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn list_branches(&self) -> Result<Vec<(String, CommitId)>> {
+        let branches = self.branches.read().map_err(Self::lock_err)?;
+        Ok(branches.iter().map(|(k, v)| (k.clone(), *v)).collect())
+    }
+}
