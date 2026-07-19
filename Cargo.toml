@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/contextgraph-core",
+    "crates/contextgraph-cli",
+    "crates/contextgraph-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/seanrobmerriam/contextgraph"
+
+[workspace.dependencies]
+blake3 = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
+tempfile = "3"
+async-trait = "0.1"
