@@ -296,3 +296,58 @@ impl CommitStore for SqliteStore {
         Ok(())
     }
 }
+
+#[async_trait]
+impl RefStore for SqliteStore {
+    async fn get_branch(&self, name: &str) -> Result<Option<CommitId>> {
+        let row = sqlx::query("SELECT commit_id FROM branches WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        match row {
+            None => Ok(None),
+            Some(row) => Ok(Some(CommitId::from_str(
+                row.get::<String, _>("commit_id").as_str(),
+            )?)),
+        }
+    }
+
+    async fn set_branch(&self, name: &str, commit_id: CommitId) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO branches (name, commit_id) VALUES (?, ?)
+             ON CONFLICT(name) DO UPDATE SET commit_id = excluded.commit_id",
+        )
+        .bind(name)
+        .bind(commit_id.to_hex())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| GraphError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_branch(&self, name: &str) -> Result<()> {
+        let result = sqlx::query("DELETE FROM branches WHERE name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        if result.rows_affected() == 0 {
+            return Err(GraphError::BranchNotFound(name.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn list_branches(&self) -> Result<Vec<(String, CommitId)>> {
+        let rows = sqlx::query("SELECT name, commit_id FROM branches")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        rows.into_iter()
+            .map(|r| {
+                let id = CommitId::from_str(r.get::<String, _>("commit_id").as_str())?;
+                Ok((r.get::<String, _>("name"), id))
+            })
+            .collect()
+    }
+}
