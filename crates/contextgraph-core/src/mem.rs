@@ -139,3 +139,18 @@ impl RefStore for InMemoryRefStore {
         Ok(branches.iter().map(|(k, v)| (k.clone(), *v)).collect())
     }
 }
+
+/// Combines `InMemoryCommitStore` + `InMemoryRefStore` behind a single type
+/// that implements both traits, so it can back `ContextGraph<S>` directly
+/// (the same shape production code gets from `SqliteStore`).
+#[derive(Default)]
+pub struct InMemoryGraphStore {
+    commits: InMemoryCommitStore,
+    refs: InMemoryRefStore,
+}
+
+impl InMemoryGraphStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
