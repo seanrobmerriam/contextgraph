@@ -172,3 +172,102 @@ async fn fork_checkout_and_diff_work_over_stdio_against_a_multi_branch_fixture(
     client.cancel().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn bisect_finds_the_flip_point_over_stdio() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+    seed_fixture(&db_path).await?;
+
+    // Recover the good/bad commit ids from `log` first.
+    let client = spawn_client(&db_path).await?;
+    let log_result = client
+        .call_tool(
+            CallToolRequestParams::new("log")
+                .with_arguments(call_args(&[("target", "bisect-main")])),
+        )
+        .await?;
+    let page: Value = serde_json::from_str(&text_of(&log_result))?;
+    let commits = page["commits"].as_array().unwrap();
+    // log returns newest-first; last entry is the root ("order 123 placed").
+    let bad_id = commits[0]["id"].as_str().unwrap().to_string();
+    let good_id = commits[commits.len() - 1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bisect_result = client
+        .call_tool(
+            CallToolRequestParams::new("bisect").with_arguments(call_args(&[
+                ("good", &good_id),
+                ("bad", &bad_id),
+                ("contains", "order 123"),
+            ])),
+        )
+        .await?;
+    let outcome: Value = serde_json::from_str(&text_of(&bisect_result))?;
+    assert!(
+        outcome.get("Flip").is_some(),
+        "expected a flip, got {outcome:?}"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn resources_expose_branch_list_and_head() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+
+    // Seed only a `main` branch so HEAD is well-defined.
+    let store = SqliteStore::open(&db_path).await?;
+    let graph = ContextGraph::new(store);
+    graph
+        .commit_advancing_branch("main", Author::User, text("hi"), Metadata::new(Utc::now()))
+        .await?;
+
+    let client = spawn_client(&db_path).await?;
+    let resources = client.list_all_resources().await?;
+    let uris: Vec<String> = resources.iter().map(|r| r.uri.clone()).collect();
+    assert!(uris.contains(&"contextgraph://branches".to_string()));
+    assert!(uris.contains(&"contextgraph://head".to_string()));
+
+    let head = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            "contextgraph://head",
+        ))
+        .await?;
+    let head_text = match &head.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        other => panic!("expected text resource contents, got {other:?}"),
+    };
+    assert_eq!(head_text.len(), 64); // a hex commit id
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn checking_out_a_nonexistent_branch_returns_a_tool_error() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+    seed_fixture(&db_path).await?;
+
+    let client = spawn_client(&db_path).await?;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("checkout")
+                .with_arguments(call_args(&[("target", "no-such-branch")])),
+        )
+        .await;
+
+    // Either a protocol-level error or a tool-level isError result is
+    // acceptable, but it must not silently succeed.
+    if let Ok(r) = result {
+        assert!(r.is_error.unwrap_or(false));
+    }
+
+    client.cancel().await?;
+    Ok(())
+}
