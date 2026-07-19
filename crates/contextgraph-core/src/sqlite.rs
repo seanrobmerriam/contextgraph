@@ -351,3 +351,119 @@ impl RefStore for SqliteStore {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::{Author, Delta, Metadata};
+    use chrono::Utc;
+
+    fn root() -> Commit {
+        Commit::new(
+            vec![],
+            Author::System,
+            Delta::Message {
+                content: "root".into(),
+            },
+            Metadata::new(Utc::now()),
+        )
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_persists_and_retrieves_a_commit() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let r = root();
+        let id = store.put(r.clone()).await.unwrap();
+        let fetched = store.get(&id).await.unwrap().unwrap();
+        assert_eq!(fetched, r);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_rejects_commit_with_missing_parent() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let orphan = Commit::new(
+            vec![CommitId([7; 32])],
+            Author::User,
+            Delta::Message {
+                content: "x".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        let err = store.put(orphan).await.unwrap_err();
+        assert!(matches!(err, GraphError::ParentNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_is_idempotent_on_duplicate_put() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        store.put(r.clone()).await.unwrap();
+        assert_eq!(store.len().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_indexes_children_for_traversal() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        let child = Commit::new(
+            vec![r.id],
+            Author::User,
+            Delta::Message {
+                content: "hi".into(),
+            },
+            Metadata::new(Utc::now()),
+        );
+        store.put(child.clone()).await.unwrap();
+        let kids = store.children(&r.id).await.unwrap();
+        assert_eq!(kids, vec![child.id]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_ref_store_round_trips_branch_pointer() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let r = root();
+        store.put(r.clone()).await.unwrap();
+        store.set_branch("main", r.id).await.unwrap();
+        assert_eq!(store.get_branch("main").await.unwrap(), Some(r.id));
+    }
+
+    #[tokio::test]
+    async fn sqlite_ref_store_delete_of_missing_branch_fails() {
+        let store = SqliteStore::open_in_memory().await.unwrap();
+        let err = store.delete_branch("nope").await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn opening_a_store_in_a_nonexistent_directory_fails_with_a_clear_message() {
+        let err = SqliteStore::open("/no/such/directory/at/all/store.db")
+            .await
+            .unwrap_err();
+        match err {
+            GraphError::Storage(msg) => {
+                assert!(msg.contains("does not exist"), "message was: {msg}");
+                assert!(
+                    msg.contains("/no/such/directory/at/all"),
+                    "message was: {msg}"
+                );
+            }
+            other => panic!("expected Storage error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn opening_an_in_memory_store_bypasses_path_validation() {
+        // Must not be rejected as "directory does not exist" just because
+        // ":memory:" isn't a real filesystem path.
+        SqliteStore::open_in_memory().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn opening_a_store_at_an_existing_directory_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db").to_string_lossy().to_string();
+        SqliteStore::open(&path).await.unwrap();
+    }
+}
