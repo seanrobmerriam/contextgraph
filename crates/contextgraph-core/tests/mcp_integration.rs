@@ -172,3 +172,45 @@ async fn fork_checkout_and_diff_work_over_stdio_against_a_multi_branch_fixture(
     client.cancel().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn bisect_finds_the_flip_point_over_stdio() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("fixture.db").to_string_lossy().to_string();
+    seed_fixture(&db_path).await?;
+
+    // Recover the good/bad commit ids from `log` first.
+    let client = spawn_client(&db_path).await?;
+    let log_result = client
+        .call_tool(
+            CallToolRequestParams::new("log")
+                .with_arguments(call_args(&[("target", "bisect-main")])),
+        )
+        .await?;
+    let page: Value = serde_json::from_str(&text_of(&log_result))?;
+    let commits = page["commits"].as_array().unwrap();
+    // log returns newest-first; last entry is the root ("order 123 placed").
+    let bad_id = commits[0]["id"].as_str().unwrap().to_string();
+    let good_id = commits[commits.len() - 1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bisect_result = client
+        .call_tool(
+            CallToolRequestParams::new("bisect").with_arguments(call_args(&[
+                ("good", &good_id),
+                ("bad", &bad_id),
+                ("contains", "order 123"),
+            ])),
+        )
+        .await?;
+    let outcome: Value = serde_json::from_str(&text_of(&bisect_result))?;
+    assert!(
+        outcome.get("Flip").is_some(),
+        "expected a flip, got {outcome:?}"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
