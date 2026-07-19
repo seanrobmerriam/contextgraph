@@ -64,3 +64,63 @@ async fn ancestry_path<S: CommitStore + ?Sized>(
     path.reverse();
     Ok(path)
 }
+
+/// Binary-searches the ancestry path between `good` and `bad` for the exact
+/// commit where `predicate` flips from `true` to `false`.
+///
+/// Contract: `predicate` is expected to be monotonic along the path — true
+/// for a prefix starting at `good`, false for a suffix ending at `bad`.
+/// Constructed test DAGs uphold this by design; if it doesn't hold in
+/// practice (e.g. flaky predicate), the search still terminates in
+/// O(log n) calls but the reported boundary is only meaningful under the
+/// monotonicity assumption, exactly as with `git bisect`.
+pub async fn bisect<S, F>(
+    store: &S,
+    good: CommitId,
+    bad: CommitId,
+    mut predicate: F,
+) -> Result<BisectOutcome>
+where
+    S: CommitStore + ?Sized,
+    F: FnMut(&MaterializedContext) -> bool,
+{
+    let path = ancestry_path(store, good, bad).await?;
+
+    // Trivial range: a single commit has no boundary to find.
+    if path.len() == 1 {
+        return Ok(BisectOutcome::NoFlip);
+    }
+
+    let mut calls = 0usize;
+    let mut lo = 0usize;
+    let mut hi = path.len() - 1;
+
+    let good_ctx = materialize(store, path[lo]).await?;
+    calls += 1;
+    if !predicate(&good_ctx) {
+        return Ok(BisectOutcome::NoFlip);
+    }
+
+    let bad_ctx = materialize(store, path[hi]).await?;
+    calls += 1;
+    if predicate(&bad_ctx) {
+        return Ok(BisectOutcome::NoFlip);
+    }
+
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let mid_ctx = materialize(store, path[mid]).await?;
+        calls += 1;
+        if predicate(&mid_ctx) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    Ok(BisectOutcome::Flip(BisectResult {
+        last_good: path[lo],
+        first_bad: path[hi],
+        predicate_calls: calls,
+    }))
+}
