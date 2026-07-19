@@ -154,3 +154,34 @@ impl InMemoryGraphStore {
         Self::default()
     }
 }
+
+#[async_trait]
+impl CommitStore for InMemoryGraphStore {
+    async fn put(&self, commit: Commit) -> Result<CommitId> {
+        self.commits.put(commit).await
+    }
+
+    async fn get(&self, id: &CommitId) -> Result<Option<Commit>> {
+        self.commits.get(id).await
+    }
+
+    async fn contains(&self, id: &CommitId) -> Result<bool> {
+        self.commits.contains(id).await
+    }
+
+    async fn children(&self, id: &CommitId) -> Result<Vec<CommitId>> {
+        self.commits.children(id).await
+    }
+
+    async fn len(&self) -> Result<usize> {
+        self.commits.len().await
+    }
+
+    async fn all_ids(&self) -> Result<Vec<CommitId>> {
+        self.commits.all_ids().await
+    }
+
+    async fn remove_many(&self, ids: &[CommitId]) -> Result<()> {
+        self.commits.remove_many(ids).await
+    }
+}
