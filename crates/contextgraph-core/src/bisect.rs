@@ -15,3 +15,14 @@ use crate::error::{GraphError, Result};
 use crate::materialize::{materialize, MaterializedContext};
 use crate::store::CommitStore;
 use serde::Serialize;
+
+/// The outcome of a bisect run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum BisectOutcome {
+    /// The predicate flips somewhere strictly between `good` and `bad`.
+    Flip(BisectResult),
+    /// The predicate never flips across the given range (it's `true`
+    /// (still "good") at `bad` too, or already `false` at `good`). This is
+    /// a normal, clearly-reported outcome — not an error.
+    NoFlip,
+}
