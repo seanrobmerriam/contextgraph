@@ -124,3 +124,46 @@ where
         predicate_calls: calls,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::{Author, Commit, Delta, Metadata};
+    use crate::mem::InMemoryCommitStore;
+    use chrono::Utc;
+
+    /// Builds a linear chain of `n` commits, tagging each with its index so
+    /// tests can define a predicate purely in terms of position.
+    async fn build_chain(store: &InMemoryCommitStore, n: usize) -> Vec<CommitId> {
+        let mut ids = Vec::new();
+        let mut parent = None;
+        for i in 0..n {
+            let commit = Commit::new(
+                parent.into_iter().collect(),
+                Author::User,
+                Delta::Message {
+                    content: format!("turn-{i}"),
+                },
+                Metadata::new(Utc::now()).with_tag("index", i.to_string()),
+            );
+            let id = store.put(commit).await.unwrap();
+            ids.push(id);
+            parent = Some(id);
+        }
+        ids
+    }
+
+    fn index_of(ctx: &MaterializedContext) -> usize {
+        // The predicate operates on the tag of the *last* contributing
+        // commit's tag, which we look up via the manifest's tail — but tags
+        // live on Metadata, not on MaterializedMessage, so tests instead
+        // decode the index from the message content ("turn-N").
+        let last = ctx.messages.last().unwrap();
+        match &last.delta {
+            Delta::Message { content } => content
+                .strip_prefix("turn-")
+                .and_then(|s| s.parse().ok())
+                .unwrap(),
+            _ => unreachable!(),
+        }
+    }
