@@ -216,3 +216,355 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
         gc_store(&self.store).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mem::InMemoryGraphStore;
+    use chrono::Utc;
+
+    fn meta() -> Metadata {
+        Metadata::new(Utc::now())
+    }
+
+    fn text(s: &str) -> Delta {
+        Delta::Message {
+            content: s.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn committing_with_no_parent_creates_a_root_commit() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let id = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        let ctx = g.checkout(CheckoutTarget::commit(id)).await.unwrap();
+        assert_eq!(ctx.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn committing_with_nonexistent_parent_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g
+            .commit(Some(CommitId([1; 32])), Author::User, text("hi"), meta())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::ParentNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn branching_at_a_nonexistent_commit_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g.branch("main", CommitId([1; 32])).await.unwrap_err();
+        assert!(matches!(err, GraphError::CommitNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn branching_with_an_already_used_name_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let id = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        g.branch("main", id).await.unwrap();
+        let err = g.branch("main", id).await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchAlreadyExists(_)));
+    }
+
+    #[tokio::test]
+    async fn moving_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let id = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        let err = g.move_branch("nope", id).await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn moving_a_branch_to_a_nonexistent_commit_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let id = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        g.branch("main", id).await.unwrap();
+        let err = g.move_branch("main", CommitId([9; 32])).await.unwrap_err();
+        assert!(matches!(err, GraphError::CommitNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g.delete_branch("nope").await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn checking_out_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g
+            .checkout(CheckoutTarget::branch("nope"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn checking_out_a_nonexistent_commit_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g
+            .checkout(CheckoutTarget::commit(CommitId([1; 32])))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::CommitNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn commit_advancing_branch_creates_commit_and_moves_pointer_atomically_in_order() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let id1 = g
+            .commit_advancing_branch("main", Author::User, text("one"), meta())
+            .await
+            .unwrap();
+        assert_eq!(g.store().get_branch("main").await.unwrap(), Some(id1));
+
+        let id2 = g
+            .commit_advancing_branch("main", Author::Assistant, text("two"), meta())
+            .await
+            .unwrap();
+        assert_eq!(g.store().get_branch("main").await.unwrap(), Some(id2));
+
+        let ctx = g.checkout(CheckoutTarget::branch("main")).await.unwrap();
+        assert_eq!(ctx.messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn checking_out_same_commit_twice_yields_byte_identical_materialized_context() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        let child = g
+            .commit(Some(root), Author::Assistant, text("there"), meta())
+            .await
+            .unwrap();
+
+        let a = g.checkout(CheckoutTarget::commit(child)).await.unwrap();
+        let b = g.checkout(CheckoutTarget::commit(child)).await.unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[tokio::test]
+    async fn committing_identical_content_via_two_different_parents_paths_still_dedupes() {
+        // Two branches both commit the exact same text on top of the same
+        // parent: this must produce one commit id, referenced from both
+        // branches (free storage dedupe across forks).
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        g.branch("a", root).await.unwrap();
+        g.branch("b", root).await.unwrap();
+
+        let shared_meta = meta();
+        let via_a = g
+            .commit(
+                Some(root),
+                Author::Assistant,
+                text("dup"),
+                shared_meta.clone(),
+            )
+            .await
+            .unwrap();
+        let via_b = g
+            .commit(Some(root), Author::Assistant, text("dup"), shared_meta)
+            .await
+            .unwrap();
+        assert_eq!(via_a, via_b);
+    }
+
+    #[tokio::test]
+    async fn forking_from_an_existing_commit_creates_an_independent_branch() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("plan"), meta())
+            .await
+            .unwrap();
+        g.fork(root, "speculative-a").await.unwrap();
+        assert_eq!(
+            g.store().get_branch("speculative-a").await.unwrap(),
+            Some(root)
+        );
+    }
+
+    #[tokio::test]
+    async fn forking_from_a_fork_produces_a_third_independent_branch() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("plan"), meta())
+            .await
+            .unwrap();
+        g.fork(root, "fork-1").await.unwrap();
+        let child = g
+            .commit(Some(root), Author::Assistant, text("step"), meta())
+            .await
+            .unwrap();
+        g.move_branch("fork-1", child).await.unwrap();
+
+        // Forking again, from the fork's current head.
+        g.fork(child, "fork-2").await.unwrap();
+        assert_eq!(g.store().get_branch("fork-2").await.unwrap(), Some(child));
+        // The original fork is untouched by the new one.
+        assert_eq!(g.store().get_branch("fork-1").await.unwrap(), Some(child));
+    }
+
+    #[tokio::test]
+    async fn forking_from_a_nonexistent_commit_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g.fork(CommitId([1; 32]), "x").await.unwrap_err();
+        assert!(matches!(err, GraphError::CommitNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn rollback_moves_branch_backward_without_deleting_forward_commits() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit_advancing_branch("main", Author::User, text("one"), meta())
+            .await
+            .unwrap();
+        let ahead = g
+            .commit_advancing_branch("main", Author::Assistant, text("two"), meta())
+            .await
+            .unwrap();
+
+        g.rollback("main", root).await.unwrap();
+        assert_eq!(g.store().get_branch("main").await.unwrap(), Some(root));
+
+        // The commit that was "ahead" is still reachable by hash.
+        assert!(g.store().contains(&ahead).await.unwrap());
+        let ctx = g.checkout(CheckoutTarget::commit(ahead)).await.unwrap();
+        assert_eq!(ctx.messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn rollback_of_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("hi"), meta())
+            .await
+            .unwrap();
+        let err = g.rollback("nope", root).await.unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn log_over_a_branch_name_resolves_its_current_head_first() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        g.commit_advancing_branch("main", Author::User, text("one"), meta())
+            .await
+            .unwrap();
+        let second = g
+            .commit_advancing_branch("main", Author::Assistant, text("two"), meta())
+            .await
+            .unwrap();
+
+        let page = g
+            .log(
+                CheckoutTarget::branch("main"),
+                &crate::log::LogFilter::new(),
+                0,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.commits[0].id, second);
+        assert_eq!(page.total_matched, 2);
+    }
+
+    #[tokio::test]
+    async fn diff_between_two_branch_heads_resolves_each_branch_first() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("root"), meta())
+            .await
+            .unwrap();
+        g.branch("a", root).await.unwrap();
+        g.branch("b", root).await.unwrap();
+        let a_head = g
+            .commit(Some(root), Author::Assistant, text("a-only"), meta())
+            .await
+            .unwrap();
+        g.move_branch("a", a_head).await.unwrap();
+
+        let d = g
+            .diff(CheckoutTarget::branch("a"), CheckoutTarget::branch("b"))
+            .await
+            .unwrap();
+        assert_eq!(d.added().count(), 0);
+        assert_eq!(d.removed().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn diffing_against_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("root"), meta())
+            .await
+            .unwrap();
+        g.branch("a", root).await.unwrap();
+        let err = g
+            .diff(CheckoutTarget::branch("a"), CheckoutTarget::branch("nope"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn merging_two_branches_through_context_graph_advances_branch_a_only() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let root = g
+            .commit(None, Author::User, text("root"), meta())
+            .await
+            .unwrap();
+        g.branch("a", root).await.unwrap();
+        g.branch("b", root).await.unwrap();
+        let a_head = g
+            .commit(Some(root), Author::Assistant, text("a-turn"), meta())
+            .await
+            .unwrap();
+        g.move_branch("a", a_head).await.unwrap();
+        let b_head = g
+            .commit(Some(root), Author::Assistant, text("b-turn"), meta())
+            .await
+            .unwrap();
+        g.move_branch("b", b_head).await.unwrap();
+
+        let merge_id = g
+            .merge("a", "b", crate::commit::MergeStrategy::RecordOnly)
+            .await
+            .unwrap();
+        assert_eq!(g.store().get_branch("a").await.unwrap(), Some(merge_id));
+        assert_eq!(g.store().get_branch("b").await.unwrap(), Some(b_head));
+    }
+
+    #[tokio::test]
+    async fn log_over_a_nonexistent_branch_fails() {
+        let g = ContextGraph::new(InMemoryGraphStore::new());
+        let err = g
+            .log(
+                CheckoutTarget::branch("nope"),
+                &crate::log::LogFilter::new(),
+                0,
+                10,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GraphError::BranchNotFound(_)));
+    }
+}
