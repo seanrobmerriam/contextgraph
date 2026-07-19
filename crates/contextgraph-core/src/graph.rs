@@ -13,6 +13,12 @@ use crate::merge::merge as merge_branches;
 use crate::store::{CommitStore, RefStore};
 
 /// What to check out: a specific commit, or the current head of a branch.
+///
+/// ```
+/// use contextgraph_core::{CommitId, graph::CheckoutTarget};
+/// let by_id: CheckoutTarget = CommitId::from_bytes([0u8; 32]).into();
+/// let by_branch = CheckoutTarget::branch("main");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutTarget {
     Commit(CommitId),
@@ -20,10 +26,12 @@ pub enum CheckoutTarget {
 }
 
 impl CheckoutTarget {
+    /// Construct from a specific commit id.
     pub fn commit(id: CommitId) -> Self {
         Self::Commit(id)
     }
 
+    /// Construct from a branch name.
     pub fn branch(name: impl Into<String>) -> Self {
         Self::Branch(name.into())
     }
@@ -52,6 +60,11 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
 
     /// Resolves a checkout target to a concrete commit id, without
     /// materializing.
+    ///
+    /// # Errors
+    ///
+    /// * [`GraphError::CommitNotFound`] if a commit target does not exist.
+    /// * [`GraphError::BranchNotFound`] if a branch target does not exist.
     pub async fn resolve(&self, target: &CheckoutTarget) -> Result<CommitId> {
         match target {
             CheckoutTarget::Commit(id) => {
@@ -73,6 +86,12 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
     /// returns the same id without creating a duplicate node. Does not move
     /// any branch pointer — see `commit_advancing_branch` for the combined
     /// op used by normal per-turn agent loops.
+    ///
+    /// # Errors
+    ///
+    /// * [`GraphError::ParentNotFound`] if `parent` is `Some` and the
+    ///   referenced commit is not in the store.
+    /// * [`GraphError::Storage`] if the underlying store fails to persist.
     pub async fn commit(
         &self,
         parent: Option<CommitId>,
@@ -94,6 +113,15 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
     /// step. The commit is durably written before the branch pointer moves,
     /// so no reader can ever observe a branch pointing at a not-yet-persisted
     /// commit.
+    /// Commits a new turn and advances `branch_name` to point at it in one
+    /// step. The commit is durably written before the branch pointer moves,
+    /// so no reader can ever observe a branch pointing at a not-yet-persisted
+    /// commit.
+    ///
+    /// # Errors
+    ///
+    /// Any error returned by [`commit`](Self::commit) (e.g. parent not
+    /// found) or [`store.set_branch`](CommitStore::put).
     pub async fn commit_advancing_branch(
         &self,
         branch_name: &str,
@@ -109,6 +137,12 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
 
     /// Creates a new branch pointer at an existing commit. Fails if the
     /// branch already exists or the commit does not.
+    ///
+    /// # Errors
+    ///
+    /// * [`GraphError::CommitNotFound`] if `at_commit_id` is not in the store.
+    /// * [`GraphError::BranchAlreadyExists`] if a branch named `name` is
+    ///   already defined.
     pub async fn branch(&self, name: &str, at_commit_id: CommitId) -> Result<()> {
         if !self.store.contains(&at_commit_id).await? {
             return Err(GraphError::CommitNotFound(at_commit_id));
@@ -120,6 +154,11 @@ impl<S: CommitStore + RefStore> ContextGraph<S> {
     }
 
     /// Moves an existing branch pointer to a different (existing) commit.
+    ///
+    /// # Errors
+    ///
+    /// * [`GraphError::BranchNotFound`] if no branch named `name` exists.
+    /// * [`GraphError::CommitNotFound`] if `to_commit_id` is not in the store.
     pub async fn move_branch(&self, name: &str, to_commit_id: CommitId) -> Result<()> {
         if self.store.get_branch(name).await?.is_none() {
             return Err(GraphError::BranchNotFound(name.to_string()));
@@ -248,7 +287,7 @@ mod tests {
     async fn committing_with_nonexistent_parent_fails() {
         let g = ContextGraph::new(InMemoryGraphStore::new());
         let err = g
-            .commit(Some(CommitId([1; 32])), Author::User, text("hi"), meta())
+            .commit(Some(CommitId::from_bytes([1; 32])), Author::User, text("hi"), meta())
             .await
             .unwrap_err();
         assert!(matches!(err, GraphError::ParentNotFound(_)));
@@ -257,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn branching_at_a_nonexistent_commit_fails() {
         let g = ContextGraph::new(InMemoryGraphStore::new());
-        let err = g.branch("main", CommitId([1; 32])).await.unwrap_err();
+        let err = g.branch("main", CommitId::from_bytes([1; 32])).await.unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));
     }
 
@@ -292,7 +331,7 @@ mod tests {
             .await
             .unwrap();
         g.branch("main", id).await.unwrap();
-        let err = g.move_branch("main", CommitId([9; 32])).await.unwrap_err();
+        let err = g.move_branch("main", CommitId::from_bytes([9; 32])).await.unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));
     }
 
@@ -317,7 +356,7 @@ mod tests {
     async fn checking_out_a_nonexistent_commit_fails() {
         let g = ContextGraph::new(InMemoryGraphStore::new());
         let err = g
-            .checkout(CheckoutTarget::commit(CommitId([1; 32])))
+            .checkout(CheckoutTarget::commit(CommitId::from_bytes([1; 32])))
             .await
             .unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));
@@ -427,7 +466,7 @@ mod tests {
     #[tokio::test]
     async fn forking_from_a_nonexistent_commit_fails() {
         let g = ContextGraph::new(InMemoryGraphStore::new());
-        let err = g.fork(CommitId([1; 32]), "x").await.unwrap_err();
+        let err = g.fork(CommitId::from_bytes([1; 32]), "x").await.unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));
     }
 

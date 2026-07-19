@@ -9,10 +9,10 @@ use crate::commit::CommitId;
 use crate::materialize::{materialize, MaterializedMessage};
 use crate::store::CommitStore;
 use crate::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One position in a structural diff.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiffOp {
     /// Present, unchanged, in both sides (same commit id).
     Common(MaterializedMessage),
@@ -23,7 +23,7 @@ pub enum DiffOp {
 }
 
 /// A structural diff between two materialized contexts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextDiff {
     pub from: CommitId,
     pub to: CommitId,

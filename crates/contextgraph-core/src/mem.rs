@@ -226,7 +226,7 @@ mod tests {
     async fn putting_a_commit_with_nonexistent_parent_fails() {
         let store = InMemoryCommitStore::new();
         let orphan = Commit::new(
-            vec![CommitId([9; 32])],
+            vec![CommitId::from_bytes([9; 32])],
             Author::User,
             Delta::Message {
                 content: "x".into(),
@@ -277,14 +277,14 @@ mod tests {
     #[tokio::test]
     async fn getting_nonexistent_commit_returns_none_not_error() {
         let store = InMemoryCommitStore::new();
-        let result = store.get(&CommitId([1; 32])).await.unwrap();
+        let result = store.get(&CommitId::from_bytes([1; 32])).await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn branching_at_a_commit_then_reading_it_back_round_trips() {
         let refs = InMemoryRefStore::new();
-        let id = CommitId([1; 32]);
+        let id = CommitId::from_bytes([1; 32]);
         refs.set_branch("main", id).await.unwrap();
         assert_eq!(refs.get_branch("main").await.unwrap(), Some(id));
     }
@@ -299,8 +299,8 @@ mod tests {
     #[tokio::test]
     async fn moving_a_branch_pointer_overwrites_the_previous_target() {
         let refs = InMemoryRefStore::new();
-        let a = CommitId([1; 32]);
-        let b = CommitId([2; 32]);
+        let a = CommitId::from_bytes([1; 32]);
+        let b = CommitId::from_bytes([2; 32]);
         refs.set_branch("main", a).await.unwrap();
         refs.set_branch("main", b).await.unwrap();
         assert_eq!(refs.get_branch("main").await.unwrap(), Some(b));

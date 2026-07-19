@@ -101,7 +101,7 @@ proptest! {
                 let id = store.put(c).await.unwrap();
                 parent = Some(id);
             }
-            let stray = CommitId(stray_bytes);
+            let stray = CommitId::from_bytes(stray_bytes);
             let condensed = compaction(parent.into_iter().collect(), vec![stray], "note");
             let condensed_id = store.put(condensed).await.unwrap();
 

@@ -5,7 +5,7 @@
 use crate::commit::{Commit, CommitId};
 use crate::error::{GraphError, Result};
 use crate::store::CommitStore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Filters commits by exact tag match. A commit must carry every listed
@@ -34,7 +34,7 @@ impl LogFilter {
 }
 
 /// A page of `log` results, newest (closest to the requested head) first.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogPage {
     pub commits: Vec<Commit>,
     /// Total commits matching the filter, before pagination.
@@ -189,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn log_from_nonexistent_commit_fails() {
         let store = InMemoryCommitStore::new();
-        let err = log_ancestors(&store, CommitId([9; 32]), &LogFilter::new(), 0, 10)
+        let err = log_ancestors(&store, CommitId::from_bytes([9; 32]), &LogFilter::new(), 0, 10)
             .await
             .unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));

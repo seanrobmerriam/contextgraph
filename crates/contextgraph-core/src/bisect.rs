@@ -14,10 +14,10 @@ use crate::commit::CommitId;
 use crate::error::{GraphError, Result};
 use crate::materialize::{materialize, MaterializedContext};
 use crate::store::CommitStore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The outcome of a bisect run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BisectOutcome {
     /// The predicate flips somewhere strictly between `good` and `bad`.
     Flip(BisectResult),
@@ -28,7 +28,7 @@ pub enum BisectOutcome {
 }
 
 /// The two adjacent commits straddling the flip point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BisectResult {
     /// The last commit (closest to `bad`) where the predicate still held.
     pub last_good: CommitId,

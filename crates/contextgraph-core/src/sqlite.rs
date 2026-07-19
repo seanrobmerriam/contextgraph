@@ -382,7 +382,7 @@ mod tests {
     async fn sqlite_store_rejects_commit_with_missing_parent() {
         let store = SqliteStore::open_in_memory().await.unwrap();
         let orphan = Commit::new(
-            vec![CommitId([7; 32])],
+            vec![CommitId::from_bytes([7; 32])],
             Author::User,
             Delta::Message {
                 content: "x".into(),

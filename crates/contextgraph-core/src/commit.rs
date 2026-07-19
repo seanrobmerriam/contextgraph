@@ -9,15 +9,28 @@ use std::str::FromStr;
 
 /// A BLAKE3 content hash identifying a commit. Two commits with byte-identical
 /// `parent_ids` + `author` + `delta` + `metadata` always produce the same id.
+///
+/// Construct with [`CommitId::from_bytes`] (or, more commonly, by calling
+/// [`Commit::new`] or [`compute_commit_id`]); use [`CommitId::as_bytes`] to read
+/// the underlying 32 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct CommitId(pub [u8; 32]);
+pub struct CommitId([u8; 32]);
 
 impl CommitId {
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// Wraps a 32-byte hash. Use [`compute_commit_id`] to derive an id from
+    /// content, or this constructor to wrap an id you already have (e.g.
+    /// loaded from a foreign storage layer).
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the 32 raw bytes of the id.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
+    /// Returns the lowercase hex form (equivalent to `format!("{id:x}")`).
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
     }
@@ -26,6 +39,56 @@ impl CommitId {
 impl fmt::Display for CommitId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_hex())
+    }
+}
+
+/// Lowercase hexadecimal formatting (e.g. `"a1b2…"`).
+impl fmt::LowerHex for CommitId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Uppercase hexadecimal formatting (e.g. `"A1B2…"`).
+impl fmt::UpperHex for CommitId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02X}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Octal formatting of each byte, two-digit zero-padded (e.g. for `printf`-
+/// style debugging). The output length is always 86 characters (32 bytes ×
+/// 3 chars including a separator).
+impl fmt::Octal for CommitId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, byte) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(".")?;
+            }
+            write!(f, "{byte:03o}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Binary formatting of each byte, 8-bit zero-padded with separators
+/// (e.g. `"00000001.00000010"`). Useful for low-level debugging; output is
+/// always 287 characters.
+impl fmt::Binary for CommitId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, byte) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(".")?;
+            }
+            write!(f, "{byte:08b}")?;
+        }
+        Ok(())
     }
 }
 
@@ -93,9 +156,10 @@ mod hex {
 }
 
 /// Who authored a commit's delta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Author {
+    #[default]
     User,
     Assistant,
     Tool,
@@ -153,18 +217,19 @@ pub enum Delta {
 /// conversation turns — that's not well-defined for natural language, so
 /// both strategies just pick which parent's view "wins" by controlling
 /// parent order (`materialize` always follows the first parent).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeStrategy {
     /// The merge commit materializes as `branch_a`'s view; `branch_b` is
     /// linked as the second parent for audit/lineage only.
+    #[default]
     RecordOnly,
     /// The merge commit materializes as `branch_b`'s view instead.
     PreferOther,
 }
 
 /// Token accounting for a commit, if the caller supplies it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -331,8 +396,8 @@ mod tests {
             content: "merge".into(),
         };
         let meta = Metadata::new(ts());
-        let p1 = CommitId([1u8; 32]);
-        let p2 = CommitId([2u8; 32]);
+        let p1 = CommitId::from_bytes([1u8; 32]);
+        let p2 = CommitId::from_bytes([2u8; 32]);
         let id_ab = compute_commit_id(&[p1, p2], &Author::System, &delta, &meta);
         let id_ba = compute_commit_id(&[p2, p1], &Author::System, &delta, &meta);
         assert_ne!(
@@ -343,7 +408,7 @@ mod tests {
 
     #[test]
     fn commit_id_round_trips_through_hex_string() {
-        let id = CommitId([42u8; 32]);
+        let id = CommitId::from_bytes([42u8; 32]);
         let hex = id.to_hex();
         let parsed: CommitId = hex.parse().unwrap();
         assert_eq!(id, parsed);
@@ -379,7 +444,7 @@ mod tests {
     #[test]
     fn commit_with_two_parents_is_recognized_as_merge() {
         let commit = Commit::new(
-            vec![CommitId([1; 32]), CommitId([2; 32])],
+            vec![CommitId::from_bytes([1; 32]), CommitId::from_bytes([2; 32])],
             Author::System,
             Delta::Message {
                 content: "merge".into(),

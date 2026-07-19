@@ -5,12 +5,12 @@
 use crate::commit::{Author, CommitId, Delta};
 use crate::error::{GraphError, Result};
 use crate::store::CommitStore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// One turn in a materialized context: the delta contributed by a single
 /// commit, tagged with the commit that contributed it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterializedMessage {
     pub commit_id: CommitId,
     pub author: Author,
@@ -22,7 +22,7 @@ pub struct MaterializedMessage {
 /// ops remove entries from `messages`/`manifest` without touching the
 /// underlying DAG — the commits they replace remain reachable by id, just
 /// not part of this projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterializedContext {
     pub head: CommitId,
     pub messages: Vec<MaterializedMessage>,
@@ -153,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn materializing_nonexistent_commit_fails() {
         let store = InMemoryCommitStore::new();
-        let err = materialize(&store, CommitId([1; 32])).await.unwrap_err();
+        let err = materialize(&store, CommitId::from_bytes([1; 32])).await.unwrap_err();
         assert!(matches!(err, GraphError::CommitNotFound(_)));
     }
 
@@ -213,7 +213,7 @@ mod tests {
         let store = InMemoryCommitStore::new();
         let a = msg(vec![], Author::User, "one");
         store.put(a.clone()).await.unwrap();
-        let stray = CommitId([77; 32]);
+        let stray = CommitId::from_bytes([77; 32]);
         let condensed = compaction(vec![a.id], vec![stray], "condensed");
         store.put(condensed.clone()).await.unwrap();
 
