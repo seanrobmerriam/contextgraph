@@ -103,3 +103,100 @@ fn lcs_diff(a: &[MaterializedMessage], b: &[MaterializedMessage]) -> Vec<DiffOp>
     }
     ops
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::{Author, Commit, Delta, Metadata};
+    use crate::mem::InMemoryCommitStore;
+    use chrono::Utc;
+
+    fn msg(parents: Vec<CommitId>, text: &str) -> Commit {
+        Commit::new(
+            parents,
+            Author::User,
+            Delta::Message {
+                content: text.to_string(),
+            },
+            Metadata::new(Utc::now()),
+        )
+    }
+
+    #[tokio::test]
+    async fn diffing_a_commit_against_itself_yields_no_added_or_removed() {
+        let store = InMemoryCommitStore::new();
+        let a = msg(vec![], "hi");
+        store.put(a.clone()).await.unwrap();
+        let d = diff(&store, a.id, a.id).await.unwrap();
+        assert!(d.is_identical());
+        assert_eq!(d.added().count(), 0);
+        assert_eq!(d.removed().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn diffing_two_forked_branches_shows_shared_prefix_as_common() {
+        let store = InMemoryCommitStore::new();
+        let root = msg(vec![], "root");
+        store.put(root.clone()).await.unwrap();
+        let shared = msg(vec![root.id], "shared");
+        store.put(shared.clone()).await.unwrap();
+
+        let a = msg(vec![shared.id], "branch-a-turn");
+        store.put(a.clone()).await.unwrap();
+        let b = msg(vec![shared.id], "branch-b-turn");
+        store.put(b.clone()).await.unwrap();
+
+        let d = diff(&store, a.id, b.id).await.unwrap();
+        let commons: Vec<_> = d
+            .ops
+            .iter()
+            .filter(|op| matches!(op, DiffOp::Common(_)))
+            .collect();
+        assert_eq!(commons.len(), 2); // root, shared
+        assert_eq!(d.removed().count(), 1); // branch-a-turn
+        assert_eq!(d.added().count(), 1); // branch-b-turn
+    }
+
+    #[tokio::test]
+    async fn diffing_a_commit_against_its_own_child_shows_one_addition() {
+        let store = InMemoryCommitStore::new();
+        let root = msg(vec![], "root");
+        store.put(root.clone()).await.unwrap();
+        let child = msg(vec![root.id], "child");
+        store.put(child.clone()).await.unwrap();
+
+        let d = diff(&store, root.id, child.id).await.unwrap();
+        assert_eq!(d.added().count(), 1);
+        assert_eq!(d.removed().count(), 0);
+        assert!(!d.is_identical());
+    }
+
+    #[tokio::test]
+    async fn diffing_two_completely_unrelated_roots_shows_full_removal_and_addition() {
+        let store = InMemoryCommitStore::new();
+        let a = msg(vec![], "a-only");
+        store.put(a.clone()).await.unwrap();
+        let b = msg(vec![], "b-only");
+        store.put(b.clone()).await.unwrap();
+
+        let d = diff(&store, a.id, b.id).await.unwrap();
+        assert_eq!(d.removed().count(), 1);
+        assert_eq!(d.added().count(), 1);
+        assert_eq!(
+            d.ops
+                .iter()
+                .filter(|op| matches!(op, DiffOp::Common(_)))
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn diffing_two_empty_equal_single_commits_is_identical() {
+        let store = InMemoryCommitStore::new();
+        let a = msg(vec![], "");
+        store.put(a.clone()).await.unwrap();
+        let d = diff(&store, a.id, a.id).await.unwrap();
+        assert!(d.is_identical());
+    }
+}
