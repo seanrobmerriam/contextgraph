@@ -168,21 +168,6 @@ mod tests {
         }
     }
 
-    fn index_of(ctx: &MaterializedContext) -> usize {
-        // The predicate operates on the tag of the *last* contributing
-        // commit's tag, which we look up via the manifest's tail — but tags
-        // live on Metadata, not on MaterializedMessage, so tests instead
-        // decode the index from the message content ("turn-N").
-        let last = ctx.messages.last().unwrap();
-        match &last.delta {
-            Delta::Message { content } => content
-                .strip_prefix("turn-")
-                .and_then(|s| s.parse().ok())
-                .unwrap(),
-            _ => unreachable!(),
-        }
-    }
-
     async fn bisect_flip_at(n: usize, flip_at: usize) -> (BisectOutcome, usize) {
         let store = InMemoryCommitStore::new();
         let ids = build_chain(&store, n).await;
@@ -218,7 +203,7 @@ mod tests {
         }
     }
 
-i#[tokio::test]
+    #[tokio::test]
     async fn bisect_over_two_commit_range_resolves_without_looping() {
         let store = InMemoryCommitStore::new();
         let ids = build_chain(&store, 2).await;
