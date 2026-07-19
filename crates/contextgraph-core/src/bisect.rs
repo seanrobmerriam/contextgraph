@@ -26,3 +26,14 @@ pub enum BisectOutcome {
     /// a normal, clearly-reported outcome — not an error.
     NoFlip,
 }
+
+/// The two adjacent commits straddling the flip point.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BisectResult {
+    /// The last commit (closest to `bad`) where the predicate still held.
+    pub last_good: CommitId,
+    /// The first commit (closest to `good`) where the predicate no longer held.
+    pub first_bad: CommitId,
+    /// Number of predicate evaluations performed (for verifying O(log n)).
+    pub predicate_calls: usize,
+}
