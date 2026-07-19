@@ -101,3 +101,15 @@ pub enum Author {
     Tool,
     System,
 }
+
+impl fmt::Display for Author {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Author::User => "user",
+            Author::Assistant => "assistant",
+            Author::Tool => "tool",
+            Author::System => "system",
+        };
+        write!(f, "{s}")
+    }
+}
